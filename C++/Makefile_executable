@@ -1,0 +1,111 @@
+.PHONY: all clean valgrind gdb test check
+
+PREFIX ?= /usr/local
+
+# Directory constants
+
+BUILD_DIR = build
+TESTS_DIR = tests
+SRC_DIR = src
+OBJ_DIR = obj
+DEP_DIR = .dep
+
+# Additional build configuration
+
+CXXFLAGS  += -g -Wall -std=c++11 -I$(SRC_DIR)
+LDFLAGS +=
+LDLIBS  +=
+
+# Dynamically get the sources/objects/tests
+
+SOURCES = $(wildcard $(SRC_DIR)/**/*.cpp $(SRC_DIR)/*.cpp)
+OBJECTS = $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(SOURCES))
+TESTS   = $(patsubst %.cpp,%,$(wildcard $(TESTS_DIR)/*_test.cpp))
+TARGET  = $(BUILD_DIR)/program
+
+# Create directories to prevent "cannot create file" errors
+
+$(shell mkdir -p $(BUILD_DIR) $(TESTS_DIR) $(SRC_DIR) $(OBJ_DIR) $(DEP_DIR))
+$(shell mkdir -p $(patsubst $(SRC_DIR)%,$(DEP_DIR)%,$(dir $(SOURCES))))
+$(shell mkdir -p $(patsubst $(SRC_DIR)%,$(OBJ_DIR)%,$(dir $(SOURCES))))
+
+# Build the main target
+
+all: $(TARGET)
+
+$(OBJ_DIR)/%.o : $(SRC_DIR)/%.cpp
+$(OBJ_DIR)/%.o : $(SRC_DIR)/%.cpp $(DEP_DIR)/%.d
+	$(CXX) $(CXXFLAGS) -MM -MP -MT $@ -o $(DEP_DIR)/$*.d $<
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+$(TARGET): $(OBJECTS)
+	$(CXX) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+# Clean dependencies, objects, or the main target
+
+clean:
+	rm -rf $(DEP_DIR) $(OBJ_DIR) $(TARGET)
+
+clean_deps:
+	rm -rf $(DEP_DIR)
+
+clean_objects:
+	rm -f $(OBJECTS)
+
+clean_target:
+	rm -f $(TARGET)
+
+# Install to system
+
+install: all
+	install -d $(DESTDIR)/$(PREFIX)/bin/
+	install $(TARGET) $(DESTDIR)/$(PREFIX)/bin/
+
+# Run the program normally
+
+run:
+	$(TARGET)
+
+# Run the program through valgrind
+
+valgrind:
+	valgrind $(TARGET)
+
+# Run the program through gdb
+
+gdb:
+	gdb --args $(TARGET)
+
+# Builds test executables
+
+$(TESTS): $(OBJECTS)
+	$(CXX) $(CXXFLAGS) -c -o $@.o $@.cpp
+	$(CXX) $(LDFLAGS) -o $@ $@.o $^ $(LDLIBS)
+	@rm $@.o
+
+# Build and execute tests
+# Adds CXXFLAGS,LDFLAGS,LDLIBS for libcheck
+# Cleans objects before and after
+
+test: CXXFLAGS  += $(shell pkg-config check --CXXFLAGS) -DTEST_BUILD
+test: LDFLAGS += $(shell pkg-config check --libs-only-L)
+test: LDLIBS  += $(shell pkg-config check --libs-only-l)
+test: clean_objects $(TESTS)
+	$(addsuffix ;,$(TESTS))
+	rm -f $(TESTS)
+	rm -f $(OBJECTS)
+
+# Checks for potentially unsafe functions
+
+BADFUNCS = '[^_.>a-zA-Z0-9](str(n?cpy|n?cat|xfrm|n?dup|str|pbrk|tok|_)|stpn?cpy|a?sn?printf|byte_)'
+check:
+	@echo Files with potentially dangerous functions.
+	@egrep $(BADFUNCS) $(SOURCES) || true
+
+# Dependency file hacks
+# Requires all dependency files, but doesn't error out if they
+# aren't there
+
+$(DEP_DIR)/%.d: ;
+.PRECIOUS: $(DEP_DIR)/%.d
+-include $(patsubst $(SRC_DIR)/%.cpp,$(DEP_DIR)/%.d,$(SOURCES))
